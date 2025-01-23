@@ -92,16 +92,17 @@ func processBatch(ctx context.Context, client *openai.Client, httpClient *http.C
 		},
 	}
 
+	inputFileName := generateTimestampedFilename("batch_input")
 	fmt.Println("2. Creating JSONL input file...")
-	if err := createJSONLFile("batch_input.jsonl", requests); err != nil {
+	if err := createJSONLFile(inputFileName, requests); err != nil {
 		return fmt.Errorf("creating JSONL file: %w", err)
 	}
 	fmt.Println("✓ JSONL file created successfully")
 
 	fmt.Println("\n3. Uploading file to OpenAI...")
 	uploadedFile, err := client.CreateFile(ctx, openai.FileRequest{
-		FileName: "batch_input.jsonl",
-		FilePath: "batch_input.jsonl",
+		FileName: inputFileName,
+		FilePath: inputFileName,
 		Purpose:  "batch",
 	})
 	if err != nil {
@@ -215,11 +216,12 @@ func monitorBatchStatus(ctx context.Context, httpClient *http.Client, batchID st
 			elapsedTime := time.Since(startTime)
 			fmt.Println("\n✓ Batch processing completed!")
 			fmt.Println("Downloading results...")
-			err := downloadResults(ctx, httpClient, status.OutputFileID)
+			outputFileName := generateTimestampedFilename("batch_output")
+			err := downloadResults(ctx, httpClient, status.OutputFileID, outputFileName)
 			if err != nil {
 				return fmt.Errorf("downloading results: %w", err)
 			}
-			fmt.Println("✓ Results downloaded successfully to batch_output.jsonl")
+			fmt.Printf("✓ Results downloaded successfully to %s\n", outputFileName)
 
 			message := fmt.Sprintf("✅ 배치 처리가 완료되었습니다!\n배치 ID: %s\n총 소요 시간: %s",
 				batchID,
@@ -262,7 +264,7 @@ func getBatchStatus(ctx context.Context, httpClient *http.Client, batchID string
 	return &status, nil
 }
 
-func downloadResults(ctx context.Context, httpClient *http.Client, fileID string) error {
+func downloadResults(ctx context.Context, httpClient *http.Client, fileID string, outputFileName string) error {
 	fmt.Printf("Downloading file with ID: %s\n", fileID)
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/files/%s/content", baseURL, fileID), nil)
 	if err != nil {
@@ -281,8 +283,8 @@ func downloadResults(ctx context.Context, httpClient *http.Client, fileID string
 		return err
 	}
 
-	fmt.Printf("Writing results to batch_output.jsonl...\n")
-	if err := os.WriteFile("batch_output.jsonl", content, 0644); err != nil {
+	fmt.Printf("Writing results to %s...\n", outputFileName)
+	if err := os.WriteFile(outputFileName, content, 0644); err != nil {
 		return fmt.Errorf("writing output file: %w", err)
 	}
 	return nil
@@ -302,4 +304,8 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d분 %d초", m, s)
 	}
 	return fmt.Sprintf("%d초", s)
+}
+
+func generateTimestampedFilename(prefix string) string {
+	return fmt.Sprintf("%s_%s.jsonl", prefix, time.Now().Format("20060102_150405"))
 }
