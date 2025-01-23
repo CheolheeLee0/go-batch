@@ -1,0 +1,1 @@
+go run cmd/batch/test-model/main.go

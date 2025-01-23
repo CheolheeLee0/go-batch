@@ -15,9 +15,10 @@ import (
 
 const (
 	baseURL          = "https://api.openai.com/v1"
-	pollInterval     = 30 * time.Second
+	pollInterval     = 5 * time.Second
 	defaultMaxTokens = 1000
 	defaultModel     = "gpt-4o"
+	slackWebhookURL  = "https://hooks.slack.com/services/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"
 )
 
 // BatchRequest represents a single request in the batch
@@ -171,9 +172,35 @@ func createBatch(ctx context.Context, httpClient *http.Client, fileID string) (*
 	return &batch, nil
 }
 
+func sendSlackNotification(message string) error {
+	payload := struct {
+		Text string `json:"text"`
+	}{
+		Text: message,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshaling slack payload: %w", err)
+	}
+
+	resp, err := http.Post(slackWebhookURL, "application/json", bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return fmt.Errorf("sending slack notification: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("slack notification failed with status: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 func monitorBatchStatus(ctx context.Context, httpClient *http.Client, batchID string) error {
 	fmt.Println("Starting batch status monitoring...")
 	attempts := 1
+	startTime := time.Now()
 
 	for {
 		status, err := getBatchStatus(ctx, httpClient, batchID)
@@ -185,6 +212,7 @@ func monitorBatchStatus(ctx context.Context, httpClient *http.Client, batchID st
 
 		switch status.Status {
 		case "completed":
+			elapsedTime := time.Since(startTime)
 			fmt.Println("\n✓ Batch processing completed!")
 			fmt.Println("Downloading results...")
 			err := downloadResults(ctx, httpClient, status.OutputFileID)
@@ -192,6 +220,15 @@ func monitorBatchStatus(ctx context.Context, httpClient *http.Client, batchID st
 				return fmt.Errorf("downloading results: %w", err)
 			}
 			fmt.Println("✓ Results downloaded successfully to batch_output.jsonl")
+
+			message := fmt.Sprintf("✅ 배치 처리가 완료되었습니다!\n배치 ID: %s\n총 소요 시간: %s",
+				batchID,
+				formatDuration(elapsedTime),
+			)
+			if err := sendSlackNotification(message); err != nil {
+				fmt.Printf("Warning: Failed to send Slack notification: %v\n", err)
+			}
+
 			return nil
 		case "failed":
 			return fmt.Errorf("batch processing failed")
@@ -249,4 +286,20 @@ func downloadResults(ctx context.Context, httpClient *http.Client, fileID string
 		return fmt.Errorf("writing output file: %w", err)
 	}
 	return nil
+}
+
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	d -= m * time.Minute
+	s := d / time.Second
+
+	if h > 0 {
+		return fmt.Sprintf("%d시간 %d분 %d초", h, m, s)
+	} else if m > 0 {
+		return fmt.Sprintf("%d분 %d초", m, s)
+	}
+	return fmt.Sprintf("%d초", s)
 }
